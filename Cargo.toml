@@ -1,0 +1,12 @@
+[package]
+name = "mblomst_gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chess = { git = "https://github.com/INDA25PlusPlus/nhg-chess.git"}
+crossbeam = "0.8"
+ggez = "0.9"
+serde_json = "1.0.145"
+
+ 
