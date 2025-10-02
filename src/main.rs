@@ -2,6 +2,7 @@ use chess::position::get_piece_at;
 use chess::*;
 use chess::game::GameResult;
 use chess::piece::Color as ChessColor;
+
 use ggez::{Context, ContextBuilder};
 use ggez::GameResult as ggezGameResult;
 use ggez::event::{self, EventHandler};
@@ -9,84 +10,128 @@ use ggez::graphics::{self, Color, Canvas};
 use ggez::input::mouse::MouseButton;
 use ggez::graphics::Image;
 use ggez::input::keyboard::KeyCode;
-use std::collections::HashMap; 
 
-mod move_piece; 
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::collections::HashMap;
+use std::env;
+
+use connection_state::ConnectionState;
+
+mod connection_state;
+mod connection;
+mod move_piece;
 mod helper;
 
-struct MblomstGui { 
-    game: Game, 
-    board_size: (f32, f32), 
-    square_x: f32, 
-    square_y: f32, 
-    selected_square: Option<String>, 
-    piece_images: HashMap<String, Image>, 
-    checkmate: bool, 
-    color_won: Option<String>, 
-    win_messages: HashMap<String, Image>, 
-    stalemate: bool, 
+struct MblomstGui {
+    game: Game,
+    board_size: (f32, f32),
+    square_x: f32,
+    square_y: f32,
+    selected_square: Option<String>,
+    piece_images: HashMap<String, Image>,
+    checkmate: bool,
+    color_won: Option<String>,
+    win_messages: HashMap<String, Image>,
+    stalemate: bool,
+    connection_state: Arc<Mutex<ConnectionState>>,
 }
 
-impl MblomstGui { 
-    pub fn new(ctx: &mut Context) -> ggezGameResult<MblomstGui> { 
-        let position = initialize_board(); // creates "the game" 
-        let game = Game::new(position); 
-        let mut piece_images = HashMap::new(); // initiates the decoding of pieces 
-        let piece_codes = [
-            "wP", "wN", "wB", "wR", "wQ", "wK",
-            "bP", "bN", "bB", "bR", "bQ", "bK", 
-            ]; 
-            for code in piece_codes { // connecting the decoded pieces to their co-responding image 
-                let path = format!("/pieces/{}.png", code); 
-                let image = Image::from_path(ctx, path)?; 
-                piece_images.insert(code.to_string(), image); 
-            } 
-            let mut win_messages = HashMap::new(); // initiating the win screen for both black and white 
-            let messages_name = [ 
-                "White_won", "Black_won", "Stalemate", 
-            ]; 
-            for message in messages_name { // connecting it to the winning image 
-                let path = format!("/messages/{}.png", message); 
-                let image = Image::from_path(ctx, path)?; 
-                win_messages.insert(message.to_string(), image); 
-            } 
-            Ok(MblomstGui { 
-                game, board_size: (0.0, 0.0), 
-                square_x: 0.0, square_y: 0.0, 
-                selected_square: None, piece_images, 
-                checkmate: false, 
-                color_won: None, 
-                win_messages, 
-                stalemate: false, 
+impl MblomstGui {
+    pub fn new(ctx: &mut Context, connection_state: Arc<Mutex<ConnectionState>>) -> ggezGameResult<MblomstGui> {
+        println!("Initializing GUI...");
+        let position = initialize_board();
+        let game = Game::new(position);
+
+        let mut piece_images = HashMap::new();
+        let piece_codes = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
+        for code in piece_codes {
+            let path = format!("/pieces/{}.png", code);
+            match Image::from_path(ctx, path) {
+                Ok(image) => {
+                    piece_images.insert(code.to_string(), image);
+                }
+                Err(e) => {
+                    println!("Failed to load piece image '{}': {}", code, e);
+                }
             }
-        ) 
-    } 
-    
-    fn screen_to_square(&self, x: f32, y: f32) -> Option<String> { 
-        let col = ( x / self.square_x) as usize; // using mouse input x and dividing it by the square width to get a number (for example 3.2) then using usize to convert it to 3 
-        let row = (y / self.square_y) as usize; 
-        let file = (b'a' + col as u8) as char; // using the number the code got from col and converts it to an 8-bit and adds it to the byte literal 
-        let rank = 8 - row; // since y:0 is at the top 
-        Some(format!("{}{}", file, rank)) 
-    } 
+        }
+
+        let mut win_messages = HashMap::new();
+        let messages_name = ["White_won", "Black_won", "Stalemate"];
+        for message in messages_name {
+            let path = format!("/messages/{}.png", message);
+            match Image::from_path(ctx, path) {
+                Ok(image) => {
+                    win_messages.insert(message.to_string(), image);
+                }
+                Err(e) => {
+                    println!("Failed to load win message '{}': {}", message, e);
+                }
+            }
+        }
+
+        Ok(MblomstGui {
+            game,
+            board_size: (0.0, 0.0),
+            square_x: 0.0,
+            square_y: 0.0,
+            selected_square: None,
+            piece_images,
+            checkmate: false,
+            color_won: None,
+            win_messages,
+            stalemate: false,
+            connection_state,
+        })
+    }
+
+    fn screen_to_square(&self, x: f32, y: f32) -> Option<String> {
+        let col = (x / self.square_x) as usize;
+        let row = (y / self.square_y) as usize;
+        let file = (b'a' + col as u8) as char;
+        let rank = 8 - row;
+        Some(format!("{}{}", file, rank))
+    }
 }
 
-impl EventHandler for MblomstGui { 
-    fn update(&mut self, ctx: &mut Context) -> ggezGameResult { 
-        let (width, height) = ctx.gfx.drawable_size(); // Set the board size in the update function to adapt to new application sizes 
-        self.board_size = (width, height); // updates board size every frame to ensure the board stretches to the applications size 
-        self.square_x = width / 8.0; // makes the "squares" one eights of the sqreen, and thus covering the entire screen 
-        self.square_y = height / 8.0; 
-        if ctx.keyboard.is_key_pressed(KeyCode::R) { // detects if the key "r" is pressed, and if so resets the board 
-            self.color_won = None; 
-            self.checkmate = false; 
-            self.stalemate = false; 
-            let position = initialize_board(); 
-            self.game = Game::new(position); 
-        } 
-        Ok(()) 
-    } 
-    
+impl EventHandler for MblomstGui {
+    fn update(&mut self, ctx: &mut Context) -> ggezGameResult {
+        let rx = {
+            let state = self.connection_state.lock().unwrap();
+            state.incoming_rx.clone()
+        };
+
+        self.connection_state.lock().unwrap().turn = self.game.turn as usize;
+
+
+
+        while let Ok(package) = rx.try_recv() {
+            println!("Received package: {}", package);
+            let parts: Vec<&str> = package.trim().split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(from), Ok(to)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>()) {
+                    move_piece::execute_move(&mut self.game, from, to);
+                }
+            }
+        }
+
+        let (width, height) = ctx.gfx.drawable_size();
+        self.board_size = (width, height);
+        self.square_x = width / 8.0;
+        self.square_y = height / 8.0;
+
+        if ctx.keyboard.is_key_pressed(KeyCode::R) {
+            self.color_won = None;
+            self.checkmate = false;
+            self.stalemate = false;
+            let position = initialize_board();
+            self.game = Game::new(position);
+        }
+
+        Ok(())
+    }
+
     fn draw(&mut self, ctx: &mut Context) -> ggezGameResult { 
         let mut canvas = Canvas::from_frame(ctx, Color::from_rgb(255,192,203)); // makes background pink ;) 
         let (board_size_x, board_size_y) = self.board_size; 
@@ -213,58 +258,109 @@ impl EventHandler for MblomstGui {
         } 
         canvas.finish(ctx)?; // closes the draw 
         Ok(()) 
-    } 
+    }
 
-    fn mouse_button_down_event( // process mouse events 
-        &mut self, 
-        _ctx: &mut Context, 
-        button: MouseButton, 
-        x: f32, 
-        y: f32, 
-        ) -> ggezGameResult { 
-        if button == MouseButton::Left { 
-            if !self.game.is_over() { // checks if game is not done 
-                if let Some(square) = self.screen_to_square(x, y) { // makes sure a "square is clicked" 
-                    match &self.selected_square { None => { 
-                        let position = &self.game.position; // a "square" only gets selected if there is a piece on that "square" as well as the selected piece has the same color as the players turn, i.e white moves white's pieces 
-                        if let Some(piece) = position::get_piece_at(position, chess::helper::square_to_index(&square).unwrap()) { 
-                            if piece.color() == self.game.player_tracker() { 
-                                self.selected_square = Some(square); // a "square" is selected to be able to highligt in the draw function, and more 
-                                } 
-                            } 
-                        } 
-                        Some(from_square) => { // Second click: use stored square + new square 
-                            if let (Some(from), Some(to)) = (square_to_index(from_square), square_to_index(&square)) { 
-                                move_piece::execute_move(&mut self.game, from, to); // selects the second "square" and executes the move, then resets the selected squares 
-                            } // game logic process if the move is valid or not, if not the turn is not skipped, and the selected piece logic works for the same player again 
-                            self.selected_square = None; 
-                        } 
-                    } 
-                } 
-            } 
-            match self.game.result { // processing game state 
-                GameResult::Ongoing => {} 
-                GameResult::Checkmate(color) => { self.checkmate = true; 
-                    if color == ChessColor::White { 
-                        self.color_won = Some("Black".to_string()); 
-                    } 
-                    else { 
-                        self.color_won = Some("White".to_string()); 
-                    } 
-                } 
-                GameResult::Stalemate => { self.stalemate = true; }, 
-            } 
-        } 
-        Ok(()) 
-        
-    } 
+    fn mouse_button_down_event(
+        &mut self,
+        _ctx: &mut Context,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+    ) -> ggezGameResult {
+        if button == MouseButton::Left {
+            if !self.game.is_over() {
+                if let Some(square) = self.screen_to_square(x, y) {
+                    match &self.selected_square {
+                        None => {
+                            let position = &self.game.position;
+                            if let Some(piece) = position::get_piece_at(position, chess::helper::square_to_index(&square).unwrap()) {
+                                if piece.color() == self.game.player_tracker()
+                                    && ((self.game.turn % 2 == 1) == self.connection_state.lock().unwrap().is_host)
+                                {
+                                    self.selected_square = Some(square);
+                                }
+                            }
+                        }
+                        Some(from_square) => {
+                            if let (Some(from), Some(to)) = (square_to_index(from_square), square_to_index(&square)) {
+                                move_piece::execute_move(&mut self.game, from, to);
+                                let msg = format!("{} {}", from, to);
+                                println!("Pushed to outgoing: {}", msg);
+                                let tx = self.connection_state.lock().unwrap().outgoing_tx.clone();
+                                if let Err(e) = tx.send(msg.to_string()) {
+                                    println!("[Host] Failed to send test message: {}", e);
+                                }
+
+
+                            }
+                            self.selected_square = None;
+                        }
+                    }
+                }
+            }
+
+            match self.game.result {
+                GameResult::Ongoing => {}
+                GameResult::Checkmate(color) => {
+                    self.checkmate = true;
+                    self.color_won = Some(if color == ChessColor::White { "Black" } else { "White" }.to_string());
+                }
+                GameResult::Stalemate => {
+                    self.stalemate = true;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
-fn main() -> ggezGameResult { 
-    let (mut ctx, event_loop) = ContextBuilder::new("Chess_gui", "Martin") 
-    .window_setup(ggez::conf::WindowSetup::default().title("Chess :)")) 
-    .build() 
-    .expect("Failed to build ggez context"); 
-    let my_game = MblomstGui::new(&mut ctx)?; 
-    event::run(ctx, event_loop, my_game) 
+fn main() -> ggez::GameResult {
+    println!("Starting Chess GUI...");
+    let args: Vec<String> = env::args().collect();
+
+    let (mut ctx, event_loop) = ContextBuilder::new("Chess_gui", "Martin")
+        .window_setup(ggez::conf::WindowSetup::default().title("Chess :)"))
+        .add_resource_path("./resources")
+        .build()
+        .expect("Failed to build ggez context");
+
+    let conn_state = Arc::new(Mutex::new(ConnectionState::new()));
+    println!("ConnectionState Arc address: {:p}", &conn_state);
+
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--host" => {
+                conn_state.lock().unwrap().is_host = true;
+                let port: u16 = args.get(2).expect("Port not specified").parse().unwrap();
+                let conn_clone = Arc::clone(&conn_state);
+                thread::spawn(move || {
+                    connection::start_server(port, conn_clone);
+                });
+            }
+            "--connect" => {
+                conn_state.lock().unwrap().is_host = false;
+                let addr = args.get(2).expect("Address not specified").clone();
+                let conn_clone = Arc::clone(&conn_state);
+                thread::spawn(move || {
+                    connection::start_client(&addr, conn_clone);
+                });
+            }
+            _ => println!("Unknown option: {}", args[1]),
+        }
+    }
+
+    let my_game = match MblomstGui::new(&mut ctx, Arc::clone(&conn_state)) {
+        Ok(gui) => {
+            println!("GUI initialized successfully");
+            gui
+        }
+        Err(e) => {
+            println!("Failed to initialize GUI: {}", e);
+            return Err(e);
+        }
+    };
+
+    println!("Running event loop...");
+    event::run(ctx, event_loop, my_game)
 }
