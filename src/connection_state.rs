@@ -9,10 +9,10 @@ pub struct ConnectionState {
     pub stream: Option<TcpStream>,
     pub connected: bool,
     pub is_host: bool,
-    pub turn: usize, // 👈 nytt fält för turhantering
+    pub turn: usize,
 }
 
-impl ConnectionState {
+impl ConnectionState { // creates the connection sate
     pub fn new() -> Self {
         println!("ConnectionState created");
         let (outgoing_tx, outgoing_rx) = crossbeam::channel::unbounded();
@@ -26,7 +26,7 @@ impl ConnectionState {
             stream: None,
             connected: false,
             is_host: false,
-            turn: 0, // 👈 initiera turen
+            turn: 0,
         }
     }
 }

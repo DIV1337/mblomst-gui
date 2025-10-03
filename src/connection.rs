@@ -7,39 +7,30 @@ use std::time::Duration;
 
 use crate::connection_state::ConnectionState;
 
-pub fn send_message(conn: &Arc<Mutex<ConnectionState>>, msg: &str) {
-    if let Some(stream) = &mut conn.lock().unwrap().stream {
-        let _ = stream.write_all(format!("{}\n", msg).as_bytes());
-        let _ = stream.flush();
-    }
-}
-
-pub fn start_server(port: u16, connection_state: Arc<Mutex<ConnectionState>>) {
+pub fn start_server(port: u16, connection_state: Arc<Mutex<ConnectionState>>) { // starts the player called "server"
     let address = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(address).expect("Failed to bind");
 
-    println!("Server listening on port {}", port);
 
     for stream in listener.incoming().take(1) {
         match stream {
             Ok(stream) => {
-                println!("Client connected");
+                println!("Client connected"); // wait for a "client" to connect
 
                 {
                     let mut state = connection_state.lock().unwrap();
                     state.connected = true;
                     state.stream = Some(stream.try_clone().unwrap());
-                    state.turn = 1; // 👈 Host börjar med turen
+                    state.turn = 1; 
                 }
 
                 let state_clone = Arc::clone(&connection_state);
                 thread::spawn(move || {
-                    println!("[Host] Spawning handle_connection thread...");
                     let result = panic::catch_unwind(|| {
                         handle_connection(stream, state_clone);
                     });
                     if let Err(e) = result {
-                        println!("[Host] PANIK i tråden: {:?}", e);
+                        println!("[Host] panic in thread: {:?}", e);
                     }
                 });
             }
@@ -52,10 +43,9 @@ pub fn start_server(port: u16, connection_state: Arc<Mutex<ConnectionState>>) {
 
 
 
-pub fn start_client(addr: &str, connection_state: Arc<Mutex<ConnectionState>>) {
+pub fn start_client(addr: &str, connection_state: Arc<Mutex<ConnectionState>>) { // starts the player called "client"
     match TcpStream::connect(addr) {
         Ok(stream) => {
-            println!("Connected to server at {}", addr);
 
             {
                 let mut state = connection_state.lock().unwrap();
@@ -65,12 +55,11 @@ pub fn start_client(addr: &str, connection_state: Arc<Mutex<ConnectionState>>) {
 
             let state_for_thread = Arc::clone(&connection_state);
             thread::spawn(move || {
-                println!("[Client] Spawning handle_connection thread...");
                 let result = panic::catch_unwind(|| {
                     handle_connection(stream, state_for_thread);
                 });
                 if let Err(e) = result {
-                    println!("[Client] PANIK i tråden: {:?}", e);
+                    println!("[Client] panic in thread: {:?}", e);
                 }
             });
         }
@@ -81,12 +70,11 @@ pub fn start_client(addr: &str, connection_state: Arc<Mutex<ConnectionState>>) {
 }
 
 pub fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ConnectionState>>) {
-    stream.set_read_timeout(None); 
+    stream.set_read_timeout(None); // makes read_line not time out while waiting for a move
 
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let is_host = state.lock().unwrap().is_host;
     let role = if is_host { "Host" } else { "Client" };
-    println!("[{}] Started handle_connection thread", role);
 
     let outgoing_rx = {
         let state = state.lock().unwrap();
@@ -99,11 +87,9 @@ pub fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ConnectionState
     };
 
     loop {
-        println!("[{}] Loop still alive", role);
 
-        // --- WRITE outgoing messages ---
+        // called for writing messages
         while let Ok(msg) = outgoing_rx.try_recv() {
-            println!("[{}] Sending message: {}", role, msg);
             if let Err(e) = writeln!(stream, "{}", msg) {
                 println!("[{}] Failed to write to stream: {}", role, e);
                 break;
@@ -112,11 +98,10 @@ pub fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ConnectionState
                 println!("[{}] Failed to flush stream: {}", role, e);
                 break;
             }
-            println!("[{}] Message sent successfully", role);
         }
 
-        // --- READ incoming messages only when it's opponent's turn ---
-        let should_listen = {
+        // called for reading messages
+        let should_listen = { // only listens if it is the opponents turn
             let state = state.lock().unwrap();
             (state.turn % 2 == 1) != state.is_host
         };
@@ -128,20 +113,17 @@ pub fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ConnectionState
                     println!("[{}] Connection closed by peer", role);
                     break;
                 }
-                Ok(n) => {
-                    println!("[{}] Read {} bytes: {:?}", role, n, line);
+                Ok(n) => { // if there is something to read
                     let msg = line.trim().to_string();
                     if !msg.is_empty() {
-                        println!("[{}] Received message: {}", role, msg);
-                        if let Err(e) = incoming_tx.send(msg.clone()) {
+                        if let Err(e) = incoming_tx.send(msg.clone()) { //tries to send the message to incoming
                             println!("[{}] Failed to push to incoming_tx: {}", role, e);
                         } else {
-                            println!("[{}] Message pushed to incoming_tx", role);
                         }
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Timeout — no data available, continue loop
+                    // if timeout, in case of no data available, continue loop
                 }
                 Err(e) => {
                     println!("[{}] Error reading from stream: {}", role, e);
@@ -150,7 +132,7 @@ pub fn handle_connection(mut stream: TcpStream, state: Arc<Mutex<ConnectionState
             }
         }
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(20)); // gives a bit of time for the loop to catch up and minimizes risk for errors with reading
     }
 }
 

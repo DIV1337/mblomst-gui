@@ -1,3 +1,6 @@
+// enter in terminal for host: cargo run -- --host <5 number port>
+// enter in terminal for client: cargo run -- --connect 127.0.0.1:<same 5 number port>
+
 use chess::position::get_piece_at;
 use chess::*;
 use chess::game::GameResult;
@@ -39,11 +42,10 @@ struct MblomstGui {
 
 impl MblomstGui {
     pub fn new(ctx: &mut Context, connection_state: Arc<Mutex<ConnectionState>>) -> ggezGameResult<MblomstGui> {
-        println!("Initializing GUI...");
-        let position = initialize_board();
+        let position = initialize_board(); // initiate game and board
         let game = Game::new(position);
 
-        let mut piece_images = HashMap::new();
+        let mut piece_images = HashMap::new(); // connects pieces to their coresponding image
         let piece_codes = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
         for code in piece_codes {
             let path = format!("/pieces/{}.png", code);
@@ -57,7 +59,7 @@ impl MblomstGui {
             }
         }
 
-        let mut win_messages = HashMap::new();
+        let mut win_messages = HashMap::new(); // connects "win messages" to their coresponding images
         let messages_name = ["White_won", "Black_won", "Stalemate"];
         for message in messages_name {
             let path = format!("/messages/{}.png", message);
@@ -86,7 +88,7 @@ impl MblomstGui {
         })
     }
 
-    fn screen_to_square(&self, x: f32, y: f32) -> Option<String> {
+    fn screen_to_square(&self, x: f32, y: f32) -> Option<String> { // selects a square from coordinates
         let col = (x / self.square_x) as usize;
         let row = (y / self.square_y) as usize;
         let file = (b'a' + col as u8) as char;
@@ -96,8 +98,8 @@ impl MblomstGui {
 }
 
 impl EventHandler for MblomstGui {
-    fn update(&mut self, ctx: &mut Context) -> ggezGameResult {
-        let rx = {
+    fn update(&mut self, ctx: &mut Context) -> ggezGameResult { // updates screen
+        let rx = { // handles receiving data
             let state = self.connection_state.lock().unwrap();
             state.incoming_rx.clone()
         };
@@ -106,28 +108,27 @@ impl EventHandler for MblomstGui {
 
 
 
-        while let Ok(package) = rx.try_recv() {
-            println!("Received package: {}", package);
-            let parts: Vec<&str> = package.trim().split_whitespace().collect();
+        while let Ok(package) = rx.try_recv() { // try to recive data from second player
+            let parts: Vec<&str> = package.trim().split_whitespace().collect(); // convert type for execute
             if parts.len() == 2 {
                 if let (Ok(from), Ok(to)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>()) {
-                    move_piece::execute_move(&mut self.game, from, to);
+                    move_piece::execute_move(&mut self.game, from, to); // executes move, will have the same effect as the move just made by the second player
                 }
             }
         }
 
-        let (width, height) = ctx.gfx.drawable_size();
+        let (width, height) = ctx.gfx.drawable_size(); // makes application adjustable to different screen sizes
         self.board_size = (width, height);
         self.square_x = width / 8.0;
         self.square_y = height / 8.0;
 
-        if ctx.keyboard.is_key_pressed(KeyCode::R) {
-            self.color_won = None;
-            self.checkmate = false;
-            self.stalemate = false;
-            let position = initialize_board();
-            self.game = Game::new(position);
-        }
+        // if ctx.keyboard.is_key_pressed(KeyCode::R) { // only works if you are playing alone
+        //     self.color_won = None;
+        //     self.checkmate = false;
+        //     self.stalemate = false;
+        //     let position = initialize_board();
+        //     self.game = Game::new(position);
+        // }
 
         Ok(())
     }
@@ -260,7 +261,7 @@ impl EventHandler for MblomstGui {
         Ok(()) 
     }
 
-    fn mouse_button_down_event(
+    fn mouse_button_down_event( // handles mouse events
         &mut self,
         _ctx: &mut Context,
         button: MouseButton,
@@ -269,37 +270,36 @@ impl EventHandler for MblomstGui {
     ) -> ggezGameResult {
         if button == MouseButton::Left {
             if !self.game.is_over() {
-                if let Some(square) = self.screen_to_square(x, y) {
+                if let Some(square) = self.screen_to_square(x, y) { 
                     match &self.selected_square {
-                        None => {
+                        None => { // if no "square" has been pressed before
                             let position = &self.game.position;
                             if let Some(piece) = position::get_piece_at(position, chess::helper::square_to_index(&square).unwrap()) {
                                 if piece.color() == self.game.player_tracker()
-                                    && ((self.game.turn % 2 == 1) == self.connection_state.lock().unwrap().is_host)
+                                    && ((self.game.turn % 2 == 1) == self.connection_state.lock().unwrap().is_host) // makes host and client take turns
                                 {
                                     self.selected_square = Some(square);
                                 }
                             }
                         }
-                        Some(from_square) => {
+                        Some(from_square) => { // if a "square" already has been pressed
                             if let (Some(from), Some(to)) = (square_to_index(from_square), square_to_index(&square)) {
                                 move_piece::execute_move(&mut self.game, from, to);
                                 let msg = format!("{} {}", from, to);
-                                println!("Pushed to outgoing: {}", msg);
                                 let tx = self.connection_state.lock().unwrap().outgoing_tx.clone();
-                                if let Err(e) = tx.send(msg.to_string()) {
+                                if let Err(e) = tx.send(msg.to_string()) { // sends message to second player
                                     println!("[Host] Failed to send test message: {}", e);
                                 }
 
 
                             }
-                            self.selected_square = None;
+                            self.selected_square = None; // resets selected square
                         }
                     }
                 }
             }
 
-            match self.game.result {
+            match self.game.result { // determines game result
                 GameResult::Ongoing => {}
                 GameResult::Checkmate(color) => {
                     self.checkmate = true;
@@ -316,19 +316,17 @@ impl EventHandler for MblomstGui {
 }
 
 fn main() -> ggez::GameResult {
-    println!("Starting Chess GUI...");
     let args: Vec<String> = env::args().collect();
 
     let (mut ctx, event_loop) = ContextBuilder::new("Chess_gui", "Martin")
         .window_setup(ggez::conf::WindowSetup::default().title("Chess :)"))
         .add_resource_path("./resources")
-        .build()
+        .build() // initiates the application
         .expect("Failed to build ggez context");
 
     let conn_state = Arc::new(Mutex::new(ConnectionState::new()));
-    println!("ConnectionState Arc address: {:p}", &conn_state);
 
-    if args.len() > 1 {
+    if args.len() > 1 { // determines if the player is a server or a client and assignes a thread
         match args[1].as_str() {
             "--host" => {
                 conn_state.lock().unwrap().is_host = true;
@@ -351,8 +349,7 @@ fn main() -> ggez::GameResult {
     }
 
     let my_game = match MblomstGui::new(&mut ctx, Arc::clone(&conn_state)) {
-        Ok(gui) => {
-            println!("GUI initialized successfully");
+        Ok(gui) => { // initializes gui
             gui
         }
         Err(e) => {
@@ -361,6 +358,5 @@ fn main() -> ggez::GameResult {
         }
     };
 
-    println!("Running event loop...");
-    event::run(ctx, event_loop, my_game)
+    event::run(ctx, event_loop, my_game) // calls event loop
 }
